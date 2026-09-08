@@ -1,0 +1,29 @@
+{
+  "authored_date": "2026-09-08",
+  "references": [
+    {
+      "file": "references/01-dashboard-overview-reference.png",
+      "role": "Primary desktop dashboard reference",
+      "width": 1536,
+      "height": 1024
+    },
+    {
+      "file": "references/02-ticket-detail-reference.png",
+      "role": "Ticket detail / inbox / order / AI action reference",
+      "width": 1448,
+      "height": 1086
+    },
+    {
+      "file": "references/03-daily-briefing-reference.png",
+      "role": "Daily briefing visual reference",
+      "width": 941,
+      "height": 1672
+    },
+    {
+      "file": "references/04-carousel-dashboard-reference.png",
+      "role": "Overall polish / spatial UI / slide presentation reference",
+      "width": 941,
+      "height": 1672
+    }
+  ]
+}
