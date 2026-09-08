@@ -1,0 +1,320 @@
+rule that allowed it;
+- warning if irreversible.
+
+## 12.2 AUTO
+
+AUTO is configured **per automation rule**, not merely a single global magical switch.
+
+Examples that can be reasonable AUTO candidates when merchant enables them:
+
+- order status reply;
+- tracking reply;
+- standard return-request creation within window;
+- low-risk policy FAQ;
+- certain address changes before fulfillment if backend capability verifies safe state.
+
+More sensitive actions should default REVIEW:
+
+- refunds;
+- cancellation;
+- high-value reship;
+- disputed identity;
+- chargeback threat;
+- unusual repeat-refund behavior;
+- ambiguous multiple orders.
+
+## 12.3 Kill switch
+
+Implement workspace-level “Pause all automations”.
+
+When paused:
+
+- inbound ingestion continues;
+- analysis may continue if configured;
+- no automatic external writes or sends;
+- tickets enter REVIEW.
+
+This switch must be real and enforced server-side.
+
+---
+
+# 13. Policies
+
+Policy editor should support structured fields plus human-readable summary.
+
+## 13.1 Refund policy fields
+
+Example:
+
+- enabled;
+- eligible intents;
+- max days since delivery/order;
+- max auto refund amount;
+- max refunds per customer/time period;
+- final sale exclusions;
+- shipping refundable yes/no;
+- duties handling;
+- require return first yes/no;
+- damaged/missing item special rules.
+
+## 13.2 Return policy
+
+- return window;
+- must be fulfilled;
+- allowed item tags/types;
+- final sale exclusions;
+- restocking fee;
+- return shipping fee;
+- auto approve threshold;
+- exchange support.
+
+## 13.3 Cancellation policy
+
+- order age limit;
+- must be unfulfilled;
+- allowed payment states;
+- auto vs review;
+- restock behavior;
+- notify customer.
+
+## 13.4 Reship policy
+
+- lost/damaged criteria;
+- minimum no-scan duration if using inferred delay;
+- max order value;
+- repeat reship limit;
+- region restrictions;
+- review conditions.
+
+## 13.5 Tone of voice
+
+Configurable:
+
+- language;
+- formality;
+- brevity;
+- greeting preference;
+- sign-off;
+- emoji use;
+- banned phrases;
+- brand-specific examples.
+
+Do not infer profanity/casualness from internal demo data unless merchant sets it.
+
+---
+
+# 14. Tool boundary specification
+
+Each AI-exposed tool is a typed server function with validation and authorization.
+
+Required read tools:
+
+```text
+findCustomerByEmail
+getCustomer
+findOrdersForCustomer
+getOrder
+getFulfillments
+getTracking
+getReturnEligibility
+getPolicy
+getPriorTickets
+```
+
+Potential write tools, gated by capability/scopes/policy:
+
+```text
+sendReply
+createRefund
+requestReturn
+approveReturn
+cancelOrder
+editOrder
+createReplacementWorkflow
+escalateTicket
+```
+
+Every write tool must:
+
+1. resolve authenticated workspace/store;
+2. authorize current actor/automation;
+3. validate typed input;
+4. load fresh provider state;
+5. evaluate policy;
+6. create/reserve idempotency key;
+7. execute provider call;
+8. parse semantic errors;
+9. verify resulting state;
+10. persist action result;
+11. append audit event;
+12. return a minimal verified result to the model.
+
+---
+
+# 15. Idempotency and concurrency
+
+This is mandatory to avoid double refunds/double sends.
+
+Examples of idempotency keys:
+
+```text
+reply:{workspace}:{ticket}:{providerMessage}:{draftVersion}
+refund:{store}:{order}:{ticket}:{policyVersion}:{amount}:{currency}:{lineItemsHash}
+return-request:{store}:{order}:{ticket}:{itemsHash}
+cancel:{store}:{order}:{ticket}
+```
+
+Use database unique constraints and transactional state transitions.
+
+Before external mutation:
+
+- insert action as PENDING with unique key;
+- if conflict, load existing execution instead of repeating;
+- transition to RUNNING;
+- on provider success, SUCCEEDED;
+- on known failure, FAILED;
+- on timeout after request where provider outcome is unknown, mark UNKNOWN and reconcile before retry.
+
+Never auto-retry UNKNOWN high-impact mutation until provider state proves it did not succeed.
+
+---
+
+# 16. Ticket lifecycle
+
+Suggested states:
+
+```text
+OPEN
+  → IN_PROGRESS
+  → REVIEW
+  → RESOLVED
+  → ESCALATED
+  → SNOOZED
+```
+
+Rules:
+
+- inbound customer reply reopens resolved ticket unless merchant rules say otherwise;
+- outbound draft alone does not resolve;
+- action pending does not resolve;
+- successful reply may resolve routine informational tickets;
+- escalated remains open until human handles;
+- provider send failure keeps ticket unresolved.
+
+Track SLA metrics from real timestamps.
+
+---
+
+# 17. Analytics semantics
+
+Define metrics precisely so UI never lies.
+
+## 17.1 Tickets received
+
+Unique tickets created in selected period. If merchant wants messages instead, label “messages”. Do not conflate.
+
+## 17.2 AI handled
+
+Ticket counts as AI handled only when:
+
+- no human approval or edit was required for the resolution path;
+- final required action/reply succeeded;
+- ticket resolved.
+
+## 17.3 Manual/review
+
+Human interacted materially: edited/approved/replied/executed.
+
+## 17.4 Escalated
+
+Ticket entered escalation state due to rule/uncertainty/risk.
+
+## 17.5 First response time
+
+`first outbound customer-facing message timestamp - first inbound timestamp`.
+
+Exclude internal note.
+
+## 17.6 Resolution time
+
+`resolvedAt - ticket.createdAt`, with reopened periods handled consistently and documented.
+
+## 17.7 Time saved
+
+Do not fabricate. If included, define an explicit merchant-configurable baseline minutes per handled ticket and label as estimate:
+
+```text
+estimated_minutes_saved = automated_resolved_count × configured_baseline_minutes
+```
+
+Show “estimated” in UI.
+
+---
+
+# 18. Daily briefing engine
+
+## 18.1 Deterministic metrics first
+
+Compute in SQL/application code:
+
+- total tickets;
+- automated resolved;
+- waiting review;
+- escalated;
+- top intents;
+- percentage changes;
+- average response time;
+- refunds count/value;
+- returns;
+- reships;
+- issue-category spikes.
+
+LLM receives calculated aggregates, not raw unrestricted database access.
+
+## 18.2 Trend detection
+
+For each category:
+
+- current count/rate;
+- previous comparable period count/rate;
+- absolute change;
+- relative change where denominator meaningful;
+- minimum volume threshold to avoid ridiculous +500% from 1→6 unless clearly contextualized.
+
+## 18.3 Root-cause suggestion
+
+Model can propose likely cause based on evidence such as:
+
+- tracking questions spike;
+- fulfillment update lag;
+- product SKU recurring in damaged-item tickets;
+- same carrier recurring in delay-related tickets;
+- same policy confusion wording recurring.
+
+Output must separate facts from inference.
+
+## 18.4 Recommendation
+
+Recommendation must be concrete and tied to evidence, e.g.:
+
+> “Tracking questions increased 26% while 38 orders had no carrier update for >3 days. Consider sending an automatic status email after 72 hours without a scan.”
+
+Not:
+
+> “Improve shipping communication.”
+
+---
+
+# 19. Search
+
+Global search supports:
+
+- ticket subject/body index;
+- customer email/name;
+- Shopify order name;
+- tracking number;
+- product/SKU if indexed.
+
+Do not query Shopify live on every keystroke.
+
+Use local index and explicit “Search Shopify” fallback if necessary.
