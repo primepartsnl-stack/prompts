@@ -1,0 +1,328 @@
+r AI.
+
+Never delete customer-authored content merely because heuristic thinks it is quote.
+
+## 43.4 Attachments
+
+Initial version can display attachment metadata without AI parsing.
+
+If attachment AI support is implemented later:
+
+- malware scan;
+- content type allowlist;
+- max size;
+- sandbox parsers;
+- no executable content;
+- no automatic external link fetching;
+- store derived text separately with provenance.
+
+---
+
+# 44. AI prompt architecture in detail
+
+Use at least three prompt layers rather than one massive agent prompt.
+
+## 44.1 Intent/context analysis prompt
+
+Input:
+
+- latest clean customer message;
+- concise thread summary;
+- candidate orders;
+- verified fulfillment/tracking;
+- policy snippets;
+- allowed intent/action enums.
+
+Output: structured TicketDecision.
+
+No tools executed in this stage.
+
+## 44.2 Action validation
+
+Deterministic server code, no prompt.
+
+## 44.3 Reply-generation prompt
+
+Input only verified facts + action result.
+
+Example:
+
+```json
+{
+  "customerName": "Sophie",
+  "intent": "TRACKING",
+  "verifiedFacts": [
+    "Order #1842 was fulfilled on 2026-09-05",
+    "Carrier: ...",
+    "Tracking URL: ..."
+  ],
+  "actionResult": null,
+  "tone": {
+    "language": "nl",
+    "formality": "casual",
+    "maxSentences": 4
+  }
+}
+```
+
+The reply model does not need raw customer lifetime value, hidden risk flags, tokens, or unrelated orders.
+
+## 44.4 Briefing prompt
+
+Feed aggregates and samples, not unlimited full inbox.
+
+The model returns:
+
+```ts
+type BriefingNarrative = {
+  headline: string;
+  observedChanges: Array<{ statement: string; metricRefs: string[] }>;
+  likelyCauses: Array<{ statement: string; evidenceRefs: string[]; confidence: number }>;
+  recommendations: Array<{ statement: string; rationale: string; priority: 'LOW'|'MEDIUM'|'HIGH' }>;
+};
+```
+
+Server verifies referenced metric/evidence IDs exist.
+
+---
+
+# 45. Policy engine examples
+
+Policy evaluation should be inspectable.
+
+Example output:
+
+```json
+{
+  "decision": "ALLOW_AUTO",
+  "ruleId": "tracking-delay-auto-reply",
+  "policyVersion": 7,
+  "checks": [
+    {"check":"intent == TRACKING","passed":true},
+    {"check":"order_match_confidence >= 0.95","passed":true},
+    {"check":"action == REPLY_ONLY","passed":true},
+    {"check":"provider_context_fresh","passed":true}
+  ]
+}
+```
+
+Refund example:
+
+```json
+{
+  "decision": "REQUIRE_REVIEW",
+  "checks": [
+    {"check":"refund_requested","passed":true},
+    {"check":"amount <= auto_limit","passed":false,"detail":"79.95 > 50.00"}
+  ]
+}
+```
+
+Display concise reason to operator.
+
+---
+
+# 46. Database constraints and indexes
+
+At minimum create indexes for:
+
+- Ticket `(workspaceId, status, latestMessageAt desc)`;
+- Ticket `(workspaceId, customerEmail)`;
+- Ticket `(workspaceId, linkedOrderId)`;
+- Message `(ticketId, sentAt)`;
+- Message unique provider identity;
+- Order `(workspaceId, shopifyOrderGid)` unique;
+- Order `(workspaceId, orderName)`;
+- Customer `(workspaceId, email)`;
+- ActionExecution unique `(workspaceId, idempotencyKey)`;
+- AuditEvent `(workspaceId, createdAt desc)`;
+- DailyBriefing `(workspaceId, periodStart, periodEnd)`;
+- webhook delivery/provider event ID unique.
+
+Foreign keys should cascade carefully. Audit logs generally should not vanish because a ticket is soft-deleted.
+
+Use soft deletion only where it has a real product/compliance reason. Do not make every table soft-deleted by habit.
+
+---
+
+# 47. Transaction boundaries
+
+Examples:
+
+## Provider event ingestion
+
+DB transaction:
+
+- dedupe event;
+- upsert projection;
+- enqueue follow-up marker/outbox if using transactional outbox.
+
+## Action reservation
+
+DB transaction:
+
+- authorize;
+- insert ActionExecution PENDING unique;
+- record audit requested.
+
+Provider call occurs outside long DB transaction.
+
+Then transaction:
+
+- update execution outcome;
+- update ticket state;
+- append audit.
+
+Use outbox pattern if infrastructure supports it to avoid DB/queue split-brain.
+
+---
+
+# 48. Cache strategy
+
+Cache only data where stale behavior is acceptable.
+
+Good candidates:
+
+- workspace policy compilation;
+- integration capability metadata;
+- dashboard aggregate queries short TTL;
+- customer/order local projection.
+
+Bad candidates:
+
+- destructive action fresh-state validation;
+- refund eligibility immediately before mutation;
+- cancellation state immediately before mutation.
+
+Cache key always includes tenant/store identifier.
+
+---
+
+# 49. Date/time/currency correctness
+
+Time:
+
+- store timestamps UTC;
+- render merchant timezone;
+- daily briefing boundaries use merchant timezone;
+- DST-safe date library.
+
+Money:
+
+- never use JS floating-point for financial operations;
+- represent decimal as string/decimal library/integer minor units depending currency strategy;
+- preserve currency code;
+- never combine amounts across currencies without explicit conversion semantics.
+
+Percentages:
+
+- handle denominator zero;
+- label percentage points vs relative percentage change correctly.
+
+---
+
+# 50. Search and command palette behavior
+
+Search field from reference should feel instant.
+
+Debounce local/API search around 150–250ms where needed.
+
+Results grouped:
+
+- Tickets;
+- Orders;
+- Customers.
+
+Keyboard:
+
+- Up/down;
+- Enter;
+- Escape;
+- Cmd/Ctrl+K.
+
+Do not leak results across workspaces.
+
+---
+
+# 51. Notifications
+
+If notification bell exists, it must have a real source.
+
+Potential events:
+
+- ticket escalated;
+- automation failed;
+- integration disconnected;
+- refund/cancel action needs review;
+- daily briefing ready.
+
+If notification backend is not implemented, remove the bell from production UI rather than keeping decorative chrome.
+
+---
+
+# 52. Audit log UI
+
+Each row:
+
+- timestamp;
+- actor;
+- ticket/order;
+- event;
+- status.
+
+Detail drawer:
+
+- sanitized action arguments;
+- policy version;
+- approval actor;
+- provider result ID;
+- error code if any.
+
+Never show raw secrets.
+
+Audit is append-only from product perspective.
+
+---
+
+# 53. Permissions matrix
+
+Example:
+
+| Capability | Owner | Admin | Agent | Viewer |
+|---|---:|---:|---:|---:|
+| View dashboard | ✓ | ✓ | ✓ | ✓ |
+| View tickets | ✓ | ✓ | ✓ | configurable |
+| Reply | ✓ | ✓ | ✓ | — |
+| Approve low-risk action | ✓ | ✓ | configurable | — |
+| Approve refund/cancel | ✓ | ✓ | optional | — |
+| Edit policies | ✓ | ✓ | — | — |
+| Enable AUTO | ✓ | ✓ | — | — |
+| Manage integrations | ✓ | ✓ | — | — |
+| View audit | ✓ | ✓ | limited | limited |
+
+Implement actual authorization checks, not just this table.
+
+---
+
+# 54. Seed/demo mode
+
+A demo mode is useful for visual development.
+
+Rules:
+
+- must be impossible to confuse with production-connected store;
+- use fixed tenant `demo` or separate DB;
+- never call real provider writes;
+- deterministic date/time via fixture clock for screenshot testing;
+- deterministic chart data;
+- deterministic ticket examples.
+
+When real connection exists, demo metrics disappear.
+
+---
+
+# 55. Visual polish micro-details
+
+These are easy to miss and make the difference between “AI-built dashboard” and polished product.
+
+- Align card titles to consistent x coordina
