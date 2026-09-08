@@ -1,0 +1,274 @@
+ requested actions are permitted.
+9. If REVIEW:
+   - AI draft + suggested action appears;
+   - merchant can edit/approve/reject;
+   - any write action occurs only after explicit approval.
+10. If AUTO and all gates pass:
+   - narrow backend action tool executes;
+   - result is verified;
+   - reply is composed from verified result;
+   - reply is sent;
+   - ticket status updates;
+   - complete audit entry is stored.
+11. If confidence or policy gate fails, ticket is escalated with a human-readable reason.
+
+## 3.3 Merchant opens ticket
+
+Display in one cohesive workspace:
+
+- ticket list;
+- customer message thread;
+- customer identity;
+- current order;
+- payment status;
+- fulfillment status;
+- tracking;
+- prior orders;
+- prior tickets;
+- AI analysis;
+- policy evidence;
+- proposed action;
+- available approved actions;
+- audit history.
+
+The merchant should not need to tab between Shopify and the inbox for routine cases.
+
+## 3.4 Daily briefing
+
+On configured schedule, default 09:00 merchant timezone:
+
+1. aggregate previous day / rolling 24 hours;
+2. compare with prior comparable period;
+3. detect largest category changes;
+4. identify recurring root causes using verified ticket classifications;
+5. generate recommendations grounded in stored metrics;
+6. store briefing;
+7. optionally deliver via email/Slack later; dashboard display is required now.
+
+Do not allow the LLM to fabricate a cause. Distinguish:
+
+- `observed_fact` — directly calculated;
+- `likely_cause` — model inference, clearly labeled;
+- `recommendation` — suggested action.
+
+---
+
+# 4. Information architecture and routes
+
+Required merchant routes, names can adapt to existing router conventions:
+
+- `/dashboard`
+- `/inbox`
+- `/inbox/:ticketId`
+- `/orders`
+- `/orders/:orderId`
+- `/customers`
+- `/customers/:customerId`
+- `/automations`
+- `/analytics`
+- `/policies`
+- `/integrations`
+- `/settings`
+- `/audit`
+
+Optional admin/system routes:
+
+- `/settings/team`
+- `/settings/security`
+- `/settings/ai`
+- `/settings/notifications`
+
+Every route must enforce workspace/store authorization server-side, not only by hiding links client-side.
+
+---
+
+# 5. Pixel-perfect dashboard visual specification
+
+## 5.1 Overall visual language
+
+Match the references:
+
+- white / pale blue-gray canvas;
+- extremely clean layout;
+- soft spatial depth;
+- subtle neumorphism, not exaggerated embossed UI;
+- rounded cards;
+- low-contrast borders;
+- gentle multi-layer shadows;
+- dark navy text;
+- muted blue-gray secondary text;
+- restrained blue, mint, violet, amber accents;
+- no dark-mode-first presentation;
+- no neon;
+- no AI gradient blobs;
+- no robot mascots;
+- no huge glowing “AI” elements;
+- no random startup logo;
+- no “Niffo” branding unless the actual merchant/workspace is named that.
+
+## 5.2 Suggested design tokens
+
+Use these as starting values and tune against images.
+
+```css
+:root {
+  --canvas: #f5f8fc;
+  --surface: rgba(255,255,255,0.88);
+  --surface-solid: #ffffff;
+  --surface-soft: #f8faff;
+  --text-strong: #0b1535;
+  --text: #17213f;
+  --text-muted: #7180a0;
+  --line: rgba(37,70,130,0.10);
+  --blue: #2f7df6;
+  --blue-soft: #eaf2ff;
+  --mint: #25bd8b;
+  --mint-soft: #e8faf4;
+  --violet: #7459e8;
+  --violet-soft: #f0edff;
+  --amber: #eea63d;
+  --amber-soft: #fff5e4;
+  --danger: #d94b55;
+  --danger-soft: #fff0f1;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --shadow-card:
+    0 1px 1px rgba(18,38,70,.03),
+    0 8px 22px rgba(43,78,128,.07),
+    0 20px 48px rgba(47,91,160,.035);
+  --shadow-raised:
+    0 3px 8px rgba(25,55,98,.07),
+    0 14px 34px rgba(42,84,145,.10),
+    inset 0 1px 0 rgba(255,255,255,.95);
+}
+```
+
+Typography:
+
+- use the repository's existing modern sans if it matches;
+- otherwise use Inter, Geist, or another neutral grotesk with similar metrics;
+- avoid rounded playful fonts;
+- body text should be compact but readable;
+- use tabular numerals for KPI values if font supports it.
+
+## 5.3 Desktop shell
+
+Target reference viewport: 1536×1024.
+
+Approximate geometry to tune visually:
+
+- sidebar: ~210–220 px;
+- content start: sidebar + 24–28 px gap;
+- top search/control row: ~52–56 px height;
+- page horizontal padding: ~24–32 px;
+- vertical gaps between major sections: 18–22 px;
+- card gaps: 14–18 px.
+
+Sidebar:
+
+- white/pale surface integrated into canvas;
+- minimal top wordmark area: use actual workspace/store name if available; otherwise use “Support” or app product name configured by developer;
+- primary nav with line icons;
+- active item is pale blue rounded row, not solid saturated rectangle;
+- unread inbox badge small, circular/pill;
+- no fake AI usage meter;
+- no upgrade ad;
+- no fake “AI online” badge.
+
+Top bar:
+
+- wide search box: “Search tickets, orders, or customers…”;
+- keyboard hint optional (`Ctrl K` / `⌘K`);
+- right side: date range, notification button if implemented, user menu;
+- do not add meaningless decorative controls.
+
+## 5.4 Dashboard KPI row
+
+Three primary KPIs in final simplified dashboard:
+
+1. Open tickets
+2. AI handled
+3. Avg. response time
+
+Optional fourth only if reference/layout comfortably supports it: CSAT.
+
+Each KPI card:
+
+- icon in small soft colored raised tile;
+- label 12–14 px equivalent;
+- number 28–34 px equivalent;
+- comparison delta only when data exists;
+- tiny sparkline at right;
+- consistent card heights;
+- same baseline across values.
+
+Do not show “+91%” if it means “share automated”; label semantics correctly. A change delta and an automation percentage are different things.
+
+## 5.5 Main chart
+
+Title: `Tickets received vs. handled` or localized equivalent.
+
+Use real daily buckets for selected date range.
+
+Requirements:
+
+- two series: received / handled;
+- rounded bars or clean lines, matching reference;
+- very light grid lines;
+- y-axis low contrast;
+- date ticks sparse and human readable;
+- tooltip on hover;
+- no fake chart animation after initial reveal except smooth data transitions;
+- respects reduced motion.
+
+## 5.6 Resolution donut
+
+Show verified percentages:
+
+- AI automatic;
+- manual/review;
+- escalated.
+
+Center label:
+
+- resolved count for selected period.
+
+Ensure categories sum correctly. Handle zero-state without divide-by-zero.
+
+## 5.7 Recent tickets table
+
+The overview table should show only enough rows to remain airy, around 4–6 at desktop.
+
+Columns:
+
+- customer;
+- subject / normalized issue preview;
+- channel;
+- status;
+- age / last activity;
+- chevron / row action.
+
+Behaviors:
+
+- entire row clickable;
+- keyboard accessible;
+- selected/hover state subtle;
+- avatars can be initials when no profile image;
+- status pills use semantic color softly;
+- long subject truncates with accessible title/tooltip;
+- do not render fake social logos if provider is email.
+
+## 5.8 Inbox + ticket detail
+
+Match `02-ticket-detail-reference.png` conceptually.
+
+Desktop can use a 3- or 4-pane layout depending width:
+
+A. compact navigation;
+B. ticket list;
+C. customer/order context or conversation;
+D. AI/action panel.
+
+At narrower widths collapse intelligently, not squee
