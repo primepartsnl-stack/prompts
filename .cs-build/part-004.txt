@@ -1,0 +1,236 @@
+
+
+async function shopifyGraphQL<T>(
+  store: StoreConnection,
+  query: string,
+  variables: Record<string, unknown>,
+  options?: { timeoutMs?: number; operationName?: string }
+): Promise<T>;
+```
+
+Never treat HTTP 200 as semantic success without checking GraphQL errors and mutation user errors.
+
+## 9.7 Rate limits
+
+Shopify GraphQL Admin API uses calculated query cost and per app/store throttling. Standard tier is cost-limited and higher plans receive larger restore rates.
+
+Requirements:
+
+- inspect `extensions.cost.throttleStatus`;
+- centralize throttling;
+- back off when budget low;
+- avoid N+1 queries;
+- paginate intentionally;
+- cache stable projections;
+- use webhooks for change detection instead of aggressive polling;
+- never retry a non-idempotent mutation blindly.
+
+## 9.8 Core order query
+
+Create a reusable order fragment containing only fields needed by support.
+
+Example shape, verify against the active Shopify schema before shipping:
+
+```graphql
+query SupportOrder($id: ID!) {
+  order(id: $id) {
+    id
+    name
+    createdAt
+    updatedAt
+    processedAt
+    cancelledAt
+    displayFinancialStatus
+    displayFulfillmentStatus
+    currencyCode
+    email
+    totalPriceSet {
+      shopMoney { amount currencyCode }
+    }
+    customer {
+      id
+      firstName
+      lastName
+      email
+      numberOfOrders
+    }
+    lineItems(first: 50) {
+      nodes {
+        id
+        name
+        quantity
+        sku
+        variant { id title }
+      }
+    }
+    fulfillments(first: 20) {
+      id
+      status
+      createdAt
+      deliveredAt
+      trackingInfo {
+        company
+        number
+        url
+      }
+    }
+    refunds {
+      id
+      createdAt
+    }
+  }
+}
+```
+
+Do not assume every field is non-null. Validate runtime shapes.
+
+## 9.9 Order lookup by customer/email
+
+Support messages often arrive without Shopify GID.
+
+Resolution strategy:
+
+1. normalize sender email lowercase/trim;
+2. search customer by email where permitted;
+3. get recent relevant orders;
+4. rank candidates by recency, fulfillment state, mentioned order number, product words, tracking number;
+5. if one candidate dominates, link it;
+6. otherwise show candidate picker and do not auto-execute order-specific writes.
+
+If customer mentions order name like `#1842`, prefer exact order match after validating it belongs to sender/customer where data permits.
+
+## 9.10 Fulfillment and tracking
+
+Shopify `Fulfillment` exposes tracking info. Tracking info can contain carrier/company, number, and URL. Multiple fulfillments can exist for one order.
+
+UI must support:
+
+- zero fulfillments;
+- one fulfillment;
+- split fulfillment;
+- multiple tracking numbers;
+- deliveredAt absent;
+- unknown carrier;
+- custom tracking URL;
+- shipment status unavailable.
+
+Never say “delayed” solely because a fulfillment is old. Delay classification needs tracking status/event data or a merchant-defined time rule clearly labeled as inferred.
+
+## 9.11 Refund action
+
+Use current GraphQL mutation such as `refundCreate` when feature/scope supports it.
+
+Safety flow:
+
+1. lock ticket/action against concurrent execution;
+2. load current order fresh from Shopify;
+3. recalculate refundable amount;
+4. apply merchant refund policy;
+5. verify currency;
+6. verify line item quantities;
+7. verify monetary limit for AUTO;
+8. if REVIEW require human confirmation with exact amount;
+9. generate idempotency key;
+10. execute mutation;
+11. inspect GraphQL errors + userErrors;
+12. fetch/verify updated order/refund state;
+13. store provider refund ID;
+14. only then generate/send reply saying refund was processed.
+
+Never let the AI freely choose arbitrary refund amounts outside validated server-side constraints.
+
+## 9.12 Cancellation
+
+Shopify provides `orderCancel` with explicit reason/refund/restock/notify semantics and asynchronous job result.
+
+Treat cancellation as high-impact.
+
+Default policy recommendation:
+
+- REVIEW by default;
+- AUTO only for tightly constrained unpaid/unfulfilled conditions explicitly enabled by merchant.
+
+After `orderCancel`, monitor returned job or refetch until terminal result. Never tell customer cancellation succeeded before provider confirms.
+
+## 9.13 Order edits / address changes
+
+Do not model “change address” as a generic patch without verifying what the current Shopify API and order state support.
+
+For order editing, Shopify exposes a staged order edit flow:
+
+1. `orderEditBegin`;
+2. apply allowed edit mutation(s);
+3. `orderEditCommit`.
+
+`orderEditBegin` requires `write_order_edits`.
+
+Before enabling an address/order modification tool:
+
+- verify exact mutation required by current schema;
+- verify order is editable;
+- enforce policy/time window;
+- if fulfillment already progressed, escalate rather than pretending edit succeeded;
+- verify after commit.
+
+## 9.14 Returns
+
+Returns are GraphQL-only in Shopify return management.
+
+Current lifecycle includes:
+
+- `returnRequest` → REQUESTED;
+- `returnApproveRequest` → OPEN;
+- `returnDeclineRequest` → DECLINED;
+- `returnCreate` → OPEN for already-approved flows;
+- `returnProcess` handles returned/exchange quantities, dispositions, and optional financial transfer/refund;
+- `returnCancel` / `returnClose` under their allowed state constraints.
+
+Use `returnableFulfillments` to determine eligible fulfilled line items instead of guessing.
+
+Default automation:
+
+- request can be automated if merchant rules allow;
+- approval can be AUTO only when rules are unambiguous;
+- processing/refund should have stronger safeguards.
+
+## 9.15 Reship / replacement
+
+A “reship” is not one universal Shopify mutation.
+
+Implement as a merchant-configurable workflow. Depending on business process it might mean:
+
+- creating replacement order/draft order;
+- editing order where valid;
+- creating fulfillment for replacement line items;
+- invoking external 3PL workflow.
+
+Therefore expose a tool only when the merchant has configured the concrete backend workflow. Otherwise show “Replacement requires review”.
+
+## 9.16 Webhooks
+
+Prefer app-specific webhook subscriptions through app configuration where appropriate. Shopify recommends app configuration for subscriptions across installed stores; shop-specific subscriptions can use GraphQL Admin API.
+
+Set webhook API version to the configured stable version.
+
+Relevant topics can include, depending scopes/features:
+
+- `orders/create`
+- `orders/updated`
+- `orders/cancelled`
+- `orders/edited`
+- `orders/fulfilled`
+- `refunds/create`
+- `fulfillments/create`
+- `fulfillments/update`
+- returns topics such as `returns/request`, `returns/approve`, `returns/decline`, `returns/update`, `returns/process`, `returns/cancel`, `returns/close`, `returns/reopen`
+- customer update topics if needed
+- `app/uninstalled`
+- mandatory privacy/compliance topics when applicable to app distribution.
+
+Webhook handler requirements:
+
+1. read raw request body;
+2. verify Shopify webhook authenticity/HMAC using official library or documented mechanism;
+3. deduplicate by webhook ID;
+4. return 2xx quickly;
+5. enqueue heavy 
